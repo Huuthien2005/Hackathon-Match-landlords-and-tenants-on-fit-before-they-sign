@@ -1,8 +1,10 @@
 """Retrain the global model with swipe feedback, in a background thread.
 
-Training data = 65,000 tenancy outcomes (cached matrix) + every swipe in the feedback table.
-Each swipe counts FEEDBACK_WEIGHT times, so a few hundred swipes can move the model without
-drowning out the outcome data. After training we re-check accuracy on held-out tenants and
+Training data = 65,000 tenancy outcomes (cached matrix) + swipes from the feedback table.
+Swipes are a TASTE signal, not an outcome, so they are used carefully: each counts once, and they only
+join the shared model once there are MIN_FEEDBACK of them. (Tested: 20 random demo swipes at 5x weight
+moved one prediction from 95% to 71%; that is too much influence for a few clicks.) Each person's
+own taste is learned immediately by the personal model (ml/personal.py) instead. After training we re-check accuracy on held-out tenants and
 the four-fifths fairness rule, then swap the new model in without restarting the server.
 """
 import json
@@ -17,7 +19,8 @@ from . import model as model_mod
 from .features import FEATURES
 from .trainset import load_cache
 
-FEEDBACK_WEIGHT = 5.0
+FEEDBACK_WEIGHT = 1.0
+MIN_FEEDBACK = 50          # swipes needed before they influence the shared model
 GOOD, K = 0.80, 3
 DATA = Path(__file__).resolve().parents[2] / "data" / "deservia.db"
 
@@ -47,8 +50,15 @@ def retrain_now():
     import joblib
 
     t0 = time.time()
-    X, y, groups, hidden, _, info = load_cache(DATA)
     fX, fy = feedback.rows()
+    if len(fy) < MIN_FEEDBACK:
+        # Nothing new for the shared model yet: keep the live model as it is (no rewrite).
+        live = model_mod.load()
+        return {"state": "done", "version": live.get("version") if live else None, "feedback_rows": 0,
+                "message": f"{len(fy)} swipes saved; they join the shared model at {MIN_FEEDBACK}. "
+                           f"Each person's own taste is already being learned."}
+    waiting = 0
+    X, y, groups, hidden, _, info = load_cache(DATA)
     tr, te = next(GroupShuffleSplit(test_size=0.15, random_state=1).split(X, y, groups))
 
     X_train = np.vstack([X[tr], np.array(fX, float).reshape(-1, len(FEATURES))]) if fX else X[tr]
@@ -56,7 +66,7 @@ def retrain_now():
     w = np.concatenate([np.ones(len(tr)), np.full(len(fy), FEEDBACK_WEIGHT)]) if fy else np.ones(len(tr))
 
     m = CalibratedClassifierCV(
-        HistGradientBoostingClassifier(max_iter=200, learning_rate=0.08, max_leaf_nodes=24,
+        HistGradientBoostingClassifier(max_iter=300, learning_rate=0.06, max_leaf_nodes=24,
                                        l2_regularization=1.0, random_state=0),
         method="isotonic", cv=3)
     m.fit(X_train, y_train, sample_weight=w)
@@ -89,7 +99,24 @@ def retrain_now():
     return {"state": "done", "version": version, "feedback_rows": len(fy),
             "auc_held_out": card["last_retrain"]["auc_held_out"], "fairness": fair,
             "seconds": card["last_retrain"]["seconds"],
-            "message": f"Model v{version} trained on {len(tr):,} outcomes + {len(fy)} swipes"}
+            "message": f"Model v{version} trained on {len(tr):,} outcomes + {len(fy)} swipes"
+                       + (f" ({waiting} swipes saved; they join the shared model at {MIN_FEEDBACK})" if waiting else "")}
+
+
+def restore_baseline():
+    """Put back the model train.py produced (used by 'Reset all swipes')."""
+    import shutil
+    base = model_mod.MODEL_PATH.with_name("match_model_base.joblib")
+    card = model_mod.MODEL_PATH.with_name("model_card_base.json")
+    if base.exists():
+        shutil.copyfile(base, model_mod.MODEL_PATH)
+        if card.exists():
+            shutil.copyfile(card, model_mod.MODEL_PATH.with_name("model_card.json"))
+        model_mod._model = None
+        with _lock:
+            status.clear(); status.update(state="idle", version=None, message="Baseline model restored")
+        return True
+    return False
 
 
 def start():

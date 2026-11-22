@@ -54,3 +54,26 @@ class ModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(MODEL_PATH.exists() and MODEL_PATH.with_name("match_model_base.joblib").exists(), "no baseline")
+class SafeLearningTests(unittest.TestCase):
+    def test_few_swipes_do_not_change_shared_model_and_reset_restores_baseline(self):
+        import tempfile
+        from deservia import feedback as fb
+        from deservia.ml import model as M, retrain as RT
+        from deservia.ml.features import pair_features
+        real = fb.DB
+        fb.DB = Path(tempfile.mkdtemp()) / "fb.db"
+        try:
+            for l in DEMO_LISTINGS[:10]:                     # 10 random-ish demo swipes
+                f = pair_features(ALEX, l)
+                if f:
+                    fb.add("u_x", "tenant", "u_x", l["id"], hash(l["id"]) % 2, f)
+            out = RT.retrain_now()
+            self.assertEqual(out["feedback_rows"], 0)          # below MIN_FEEDBACK: not used yet
+            self.assertIn("saved", out["message"])
+        finally:
+            fb.DB = real
+            RT.restore_baseline()
+        self.assertEqual(M.load()["version"], 1)              # baseline is back

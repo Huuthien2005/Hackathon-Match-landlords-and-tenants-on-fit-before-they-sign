@@ -102,22 +102,7 @@
     "disparate_impact_ratio": 0.977,
     "passes_four_fifths_rule": true
   },
-  "version": 4,
-  "feedback_rows": 30,
-  "use": "Ranking = 50% rule match % (criteria both sides set) + 50% predicted success. Deservia suggests, never decides: the landlord chooses from screened matches.",
-  "last_retrain": {
-    "auc_held_out": 0.802,
-    "fairness": {
-      "avg_good_fits_top_k": {
-        "A": 2.36,
-        "B": 2.4
-      },
-      "disparate_impact_ratio": 0.983,
-      "passes_four_fifths_rule": true
-    },
-    "outcome_rows": 55066,
-    "feedback_rows": 30,
-    "feedback_weight": 5.0,
-    "seconds": 8.9
-  }
+  "version": 1,
+  "feedback_rows": 0,
+  "use": "Ranking = 50% rule match % (criteria both sides set) + 50% predicted success. Deservia suggests, never decides: the landlord chooses from screened matches."
 }

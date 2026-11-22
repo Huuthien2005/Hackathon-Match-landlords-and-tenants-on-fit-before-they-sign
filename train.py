@@ -129,6 +129,10 @@ def main():
                "Deservia suggests, never decides: the landlord chooses from screened matches.",
     }
     (OUT / "model_card.json").write_text(json.dumps(card, indent=2))
+    # protected baseline: "Reset all swipes" restores these, so demo swipes never permanently change the model
+    import shutil
+    shutil.copyfile(OUT / "match_model.joblib", OUT / "match_model_base.joblib")
+    shutil.copyfile(OUT / "model_card.json", OUT / "model_card_base.json")
     print(json.dumps(card["results"], indent=2))
 
 

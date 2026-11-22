@@ -1,5 +1,7 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 models/*.tmp
 .venv/
 .vscode/
+# Holds accounts and swipes; rebuilt from the CSVs on start. Never commit it.
+data/deservia.db

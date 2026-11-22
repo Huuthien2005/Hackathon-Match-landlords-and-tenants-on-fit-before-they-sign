@@ -7,6 +7,7 @@ not whether the tenancy will go well. The retrain gives likes a modest weight ne
 """
 import json
 import sqlite3
+from contextlib import contextmanager
 import threading
 import time
 from pathlib import Path
@@ -28,12 +29,18 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS feedback (
 )"""
 
 
+@contextmanager
 def _con():
+    """Open, commit on success, and ALWAYS close (an open connection can lock the file on Windows)."""
     DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB)
-    con.execute(SCHEMA)
-    con.execute("CREATE INDEX IF NOT EXISTS idx_fb_user ON feedback(user_id)")
-    return con
+    try:
+        con.execute(SCHEMA)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_fb_user ON feedback(user_id)")
+        yield con
+        con.commit()
+    finally:
+        con.close()
 
 
 def add(user_id, role, tenant_id, listing_id, liked, features, match_pct=None, ml_pct=None):
@@ -79,3 +86,47 @@ def reset(user_id=None):
             con.execute("DELETE FROM feedback WHERE user_id=?", (user_id,))
         else:
             con.execute("DELETE FROM feedback")
+
+
+def liked(user_id):
+    """[(tenant_id, listing_id, match_pct)] this user liked, newest first."""
+    with _con() as con:
+        return con.execute("SELECT tenant_id, listing_id, match_pct FROM feedback WHERE user_id=? AND liked=1 "
+                           "ORDER BY created_at DESC", (user_id,)).fetchall()
+
+
+def has_like(user_id, tenant_id, listing_id):
+    with _con() as con:
+        return con.execute("SELECT 1 FROM feedback WHERE user_id=? AND tenant_id=? AND listing_id=? AND liked=1",
+                           (user_id, tenant_id, listing_id)).fetchone() is not None
+
+
+def all_rows():
+    """Every swipe, for the agent's analytics."""
+    with _con() as con:
+        con.row_factory = sqlite3.Row
+        return [dict(r) for r in con.execute(
+            "SELECT user_id, role, tenant_id, listing_id, liked, match_pct, ml_success_pct, created_at FROM feedback")]
+
+
+def mutual_pairs():
+    """(tenant_id, listing_id) where the tenant liked the home AND the landlord liked the tenant."""
+    with _con() as con:
+        return con.execute(
+            "SELECT t.tenant_id, t.listing_id, t.match_pct FROM feedback t JOIN feedback l "
+            "ON l.user_id = t.listing_id AND l.tenant_id = t.tenant_id AND l.role='landlord' AND l.liked=1 "
+            "WHERE t.role='tenant' AND t.user_id = t.tenant_id AND t.liked=1").fetchall()
+
+
+def withdraw(user_id, tenant_id, listing_id):
+    """Turn a like into a pass: the match is no longer mutual and the card doesn't come back."""
+    with _lock, _con() as con:
+        n = con.execute("UPDATE feedback SET liked=0 WHERE user_id=? AND tenant_id=? AND listing_id=? AND liked=1",
+                        (user_id, tenant_id, listing_id)).rowcount
+    return n > 0
+
+
+def delete_everything_about(pool_id):
+    """Account deletion: remove this person's swipes AND everyone's swipes on them."""
+    with _lock, _con() as con:
+        con.execute("DELETE FROM feedback WHERE user_id=? OR tenant_id=? OR listing_id=?", (pool_id, pool_id, pool_id))

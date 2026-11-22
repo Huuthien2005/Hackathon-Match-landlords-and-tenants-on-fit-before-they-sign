@@ -12,6 +12,18 @@ TENANTS = {t["id"]: t for t in DEMO_TENANTS}
 DB = Path(__file__).resolve().parents[1] / "data" / "deservia.db"
 
 
+def _ensure_db():
+    """data/deservia.db is kept out of Git (it holds accounts). If it's missing, rebuild the dataset
+    tables from the CSV files, which are in Git."""
+    if not DB.exists() and (DB.parent / "tenancies.csv").exists():
+        from .dataset import load, write_sqlite
+        t, l, x = load(DB.parent)
+        write_sqlite(DB, t, l, x)
+
+
+_ensure_db()
+
+
 def _population():
     """Audit/metrics sample: 600 tenants x 100 listings from the dataset if present, else generated.
     (Smaller samples are noisy: at 200 tenants the ratio wobbles around 0.8 by chance.)"""
@@ -74,15 +86,45 @@ from .options import AREA_TO_REGION, RENTAL_TYPES
 
 
 def _load_pool():
+    """Dataset tenants/listings + every signed-up user who finished the questionnaire."""
     if DB.exists():
         from .dataset import load
         t, l, _ = load(DB)
     else:
         t, l = generate(1000, 300, seed=42)
-    return {x["id"]: x for x in DEMO_TENANTS + t}, {x["id"]: x for x in DEMO_LISTINGS + l}
+    return {x["id"]: x for x in t}, {x["id"]: x for x in l}
 
 
 ALL_TENANTS, ALL_LISTINGS = _load_pool()
+
+
+def register_user(user):
+    """Put (or update) a signed-up user's profile in the matching pool."""
+    from .questionnaire import to_listing, to_tenant
+    if not user.get("answers") or user["role"] not in ("tenant", "landlord"):
+        return
+    if user["role"] == "tenant":
+        ALL_TENANTS[user["pool_id"]] = to_tenant(user["pool_id"], user["answers"])
+    else:
+        ALL_LISTINGS[user["pool_id"]] = to_listing(user["pool_id"], user["answers"])
+
+
+def unregister_user(pool_id):
+    ALL_TENANTS.pop(pool_id, None)
+    ALL_LISTINGS.pop(pool_id, None)
+    _profiles.pop(pool_id, None)
+    for key in [k for k in _shown if pool_id in (k[0], k[1])]:
+        _shown.pop(key, None)
+
+
+def load_users_into_pool():
+    import os
+    from . import auth
+    if os.environ.get("DESERVIA_RESET_ON_START") == "1":
+        auth.reset_accounts()
+    auth.seed_accounts()
+    for u in auth.list_users():
+        register_user(u)
 _profiles = {}        # user_id -> latest tenant profile sent by the front end
 _shown = {}           # (user_id, item_id) -> what was on the card, for the feedback row
 
@@ -142,7 +184,11 @@ def deck(body):
             raise KeyError("Unknown listing")
         region = AREA_TO_REGION.get(me["area"])
         pairs = [(t, me) for tid, t in ALL_TENANTS.items() if tid not in seen
-                 and AREA_TO_REGION.get(t.get("area")) == region]
+                 and region is not None and AREA_TO_REGION.get(t.get("area")) == region]
+        if len(pairs) < 200:
+            # Few (or no) tenants in this landlord's region, e.g. Hamilton or a typed-in city:
+            # consider everyone. The area criterion still ranks people who want this area first.
+            pairs = [(t, me) for tid, t in ALL_TENANTS.items() if tid not in seen]
 
     scored = [(t, l, r) for t, l in pairs if not (r := score_pair(t, l))["filtered"]]
     scored.sort(key=lambda x: -x[2]["match_pct"])
@@ -207,4 +253,8 @@ def learning_status():
 
 def reset_feedback(body):
     fb.reset(body.get("user_id"))
-    return {"reset": True, "all_swipes": fb.counts()}
+    restored = False
+    if not body.get("user_id"):                 # everyone's swipes gone -> back to the clean baseline model
+        from .ml.retrain import restore_baseline
+        restored = restore_baseline()
+    return {"reset": True, "baseline_model_restored": restored, "all_swipes": fb.counts()}

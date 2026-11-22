@@ -102,7 +102,8 @@ def score_pair(tenant_raw: dict, listing: dict, _audit_unsafe: tuple = ()) -> di
         if rent > budget:
             flags.append(f"${rent - budget} over budget")
     if t.get("area"):
-        same_region = AREA_TO_REGION.get(t["area"]) == AREA_TO_REGION.get(listing["area"])
+        region = AREA_TO_REGION.get(t["area"])
+        same_region = region is not None and region == AREA_TO_REGION.get(listing["area"])
         c["area"] = (1.0, f"In {listing['area']}") if t["area"] == listing["area"] else \
             ((0.6, None) if same_region else (0.1, None))
     if t.get("rental_type"):

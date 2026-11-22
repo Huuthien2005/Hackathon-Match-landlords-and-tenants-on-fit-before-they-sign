@@ -1,5 +1,7 @@
+# The saved AI model was built with scikit-learn 1.9.1; keep it pinned so the model loads in production.
+scikit-learn==1.9.1
+numpy>=2.0
+joblib>=1.3
+# Optional: only needed for the FastAPI version (uvicorn api:app). Production uses server.py.
 fastapi>=0.110
 uvicorn>=0.29
-scikit-learn>=1.3   # AI model (train.py); matching falls back to rules without it
-joblib>=1.3
-numpy>=1.24

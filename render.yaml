@@ -1,0 +1,20 @@
+# Render Blueprint: New > Blueprint > pick this repo. Free plan.
+services:
+  - type: web
+    name: deservia-match
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: HOST
+        value: 0.0.0.0
+      - key: DESERVIA_PUBLIC_DEMO
+        value: "1"
+      - key: DESERVIA_RESET_ON_START     # every start begins with only the demo accounts
+        value: "1"
+      - key: DESERVIA_ADMIN_PASSWORD     # random owner password; see it under Environment in the Render dashboard
+        generateValue: true
